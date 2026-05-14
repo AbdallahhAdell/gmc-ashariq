@@ -405,34 +405,76 @@ h1 em, h2 em, h3 em, .hero h1 .gold {
 .nav-toggle.open span:nth-child(2) { opacity: 0; }
 .nav-toggle.open span:nth-child(3) { transform: translateY(-6.5px) rotate(-45deg); }
 
-/* ---------- Mobile menu (slide-in sheet) ---------- */
+/* ============================================================================
+   Mobile menu (slide-in sheet) — refactored for high-FPS on mobile.
+   Visual design unchanged from previous version.
+   ----------------------------------------------------------------------------
+   Performance notes (see THEME2_NOTES / main.js for the cause-and-fix log):
+     • Backdrop uses opacity + pointer-events (compositor-only) — no
+       backdrop-filter on mobile, no visibility transition.
+     • Panel uses translate3d + will-change to stay on its own GPU layer.
+     • `contain: layout paint style` isolates the panel — its animation can't
+       trigger layout/paint outside the sheet.
+     • Scroll lock is handled by `overflow:hidden` on <html>+<body> (set via
+       JS class) — no position:fixed snap, no scrollY reset, no header
+       re-animation while open.
+     • Header's blur is suppressed while menu is open to avoid stacked
+       backdrop-filter passes.
+   ========================================================================= */
+
+/* Backdrop (no backdrop-filter on mobile for FPS) */
 .nav-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(20, 17, 14, 0.45);
-  backdrop-filter: blur(6px) saturate(1.1);
-  -webkit-backdrop-filter: blur(6px) saturate(1.1);
+  background: rgba(20, 17, 14, 0.50);
   opacity: 0;
-  visibility: hidden;
+  pointer-events: none;
   z-index: 95;
-  transition: opacity 360ms var(--ease-out), visibility 360ms var(--ease-out);
+  transition: opacity 320ms cubic-bezier(.22, 1, .36, 1);
+  will-change: opacity;
 }
 .nav-backdrop.show {
   opacity: 1;
-  visibility: visible;
+  pointer-events: auto;
 }
 .nav-close { display: none; }
 
+/* Scroll lock — applied to <html> and <body> by JS when menu opens.
+   Preserves scroll position without position:fixed snapping. */
+html.nav-open,
+html.nav-open body {
+  overflow: hidden !important;
+  /* Lock viewport height so iOS Safari can't rubber-band beyond it. */
+  height: 100% !important;
+}
+
 @media (max-width: 1024px) {
   .nav-cta { display: none; }
-  .nav-toggle { display: flex; }
+  .nav-toggle {
+    display: flex;
+    transition: opacity 200ms cubic-bezier(.22, 1, .36, 1),
+                transform 200ms cubic-bezier(.22, 1, .36, 1);
+  }
 
-  /* Panel: always rendered, parked off-screen, slides in on .mobile-open */
+  /* While menu is open: kill the header blur (one compositor pass instead of
+     two) and visually retire the hamburger. */
+  body.nav-open .site-header.scrolled {
+    background: rgba(245, 241, 234, 0.96);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  body.nav-open .nav-toggle {
+    opacity: 0;
+    pointer-events: none;
+    transform: scale(.92);
+  }
+
+  /* Panel: parked off-screen on its own compositor layer. */
   .nav-links {
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    gap: 2px;
+    gap: 0;
     position: fixed;
     top: 0;
     right: 0;
@@ -447,14 +489,20 @@ h1 em, h2 em, h3 em, .hero h1 .gold {
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
-    transform: translateX(100%);
-    visibility: hidden;
-    transition: transform 440ms var(--ease-out), visibility 0s linear 440ms;
+    /* GPU compositor layer — translate3d forces it; will-change keeps it. */
+    transform: translate3d(100%, 0, 0);
+    -webkit-transform: translate3d(100%, 0, 0);
+    will-change: transform;
+    transition: transform 360ms cubic-bezier(.22, 1, .36, 1);
+    /* Contain layout/paint so animation can't reflow the document. */
+    contain: layout paint style;
+    /* Off-screen panel can't be tapped. */
+    pointer-events: none;
   }
   .nav-links.mobile-open {
-    transform: translateX(0);
-    visibility: visible;
-    transition: transform 480ms var(--ease-out), visibility 0s linear 0s;
+    transform: translate3d(0, 0, 0);
+    -webkit-transform: translate3d(0, 0, 0);
+    pointer-events: auto;
   }
 
   .nav-links a {
@@ -466,9 +514,13 @@ h1 em, h2 em, h3 em, .hero h1 .gold {
     color: var(--ink) !important;
     padding: 18px 0;
     border-bottom: 1px solid var(--line);
-    transition: color 220ms var(--ease), padding 220ms var(--ease);
+    transition: color 200ms cubic-bezier(.22, 1, .36, 1);
+    /* Crisp touch response, no 300ms tap delay, no grey flash on iOS. */
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
   }
   .nav-links a:hover,
+  .nav-links a:active,
   .nav-links a.active { color: var(--copper-500) !important; }
   /* Hide the desktop hover underline indicator inside the panel */
   .nav-links a::after { display: none; }
@@ -487,32 +539,45 @@ h1 em, h2 em, h3 em, .hero h1 .gold {
     color: var(--ink);
     cursor: pointer;
     border-radius: 50%;
-    transition: border-color 220ms var(--ease), color 220ms var(--ease), background 220ms var(--ease), transform 220ms var(--ease);
+    transition: border-color 200ms cubic-bezier(.22, 1, .36, 1),
+                color 200ms cubic-bezier(.22, 1, .36, 1),
+                background 200ms cubic-bezier(.22, 1, .36, 1),
+                transform 200ms cubic-bezier(.22, 1, .36, 1);
+    will-change: transform;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
   }
-  .nav-close:hover,
-  .nav-close:focus-visible {
+  .nav-close:hover {
     border-color: var(--ink);
     background: var(--ink);
     color: var(--cream-50);
-    outline: none;
     transform: rotate(90deg);
   }
-
-  /* While menu is open, hide the hamburger so it doesn't compete with the X */
-  body.nav-open .nav-toggle { opacity: 0; pointer-events: none; }
+  .nav-close:active { transform: scale(.94); }
+  .nav-close:focus-visible {
+    outline: 2px solid var(--copper-500);
+    outline-offset: 3px;
+  }
 }
 
-/* Belt-and-braces: keep the panel inert on desktop even if class lingers */
+/* Belt-and-braces: keep the panel inert on desktop even if class lingers. */
 @media (min-width: 1025px) {
   .nav-backdrop { display: none !important; }
   .nav-close { display: none !important; }
-  .nav-links { transform: none !important; visibility: visible !important; }
+  .nav-links {
+    transform: none !important;
+    -webkit-transform: none !important;
+    pointer-events: auto !important;
+    contain: none !important;
+    will-change: auto !important;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .nav-backdrop,
   .nav-links,
-  .nav-close { transition: none !important; }
+  .nav-close,
+  .nav-toggle { transition: none !important; }
 }
 
 /* ---------- Hero ---------- */
