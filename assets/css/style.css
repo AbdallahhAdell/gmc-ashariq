@@ -308,29 +308,58 @@ small { font-size: 0.85rem; color: var(--slate-mute); }
 .nav-toggle.open span:nth-child(2) { opacity: 0; }
 .nav-toggle.open span:nth-child(3) { transform: translateY(-6.5px) rotate(-45deg); }
 
-/* ---------- Mobile menu (slide-in sheet) ---------- */
+/* ============================================================================
+   Mobile menu (slide-in sheet) — refactored for high-FPS on mobile.
+   Visual design unchanged. See style-theme2.css for the cause-and-fix notes.
+   ========================================================================= */
+
+/* Backdrop (no backdrop-filter on mobile for FPS) */
 .nav-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(6, 16, 30, 0.62);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  background: rgba(6, 16, 30, 0.66);
   opacity: 0;
-  visibility: hidden;
+  pointer-events: none;
   z-index: 95;
-  transition: opacity 320ms var(--ease), visibility 320ms var(--ease);
+  transition: opacity 300ms cubic-bezier(.22, 1, .36, 1);
+  will-change: opacity;
 }
 .nav-backdrop.show {
   opacity: 1;
-  visibility: visible;
+  pointer-events: auto;
 }
 .nav-close { display: none; }
 
+/* Scroll lock — applied to <html>+<body> by JS when menu opens.
+   Preserves scroll position without position:fixed snap. */
+html.nav-open,
+html.nav-open body {
+  overflow: hidden !important;
+  height: 100% !important;
+}
+
 @media (max-width: 1024px) {
   .nav-cta { display: none; }
-  .nav-toggle { display: flex; }
+  .nav-toggle {
+    display: flex;
+    transition: opacity 200ms cubic-bezier(.22, 1, .36, 1),
+                transform 200ms cubic-bezier(.22, 1, .36, 1);
+  }
 
-  /* Panel: always rendered, parked off-screen, slides in on .mobile-open */
+  /* While menu is open: kill the header blur (one compositor pass instead of
+     two) and visually retire the hamburger. */
+  body.nav-open .site-header.scrolled {
+    background: rgba(6, 16, 30, 0.96);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  body.nav-open .nav-toggle {
+    opacity: 0;
+    pointer-events: none;
+    transform: scale(.92);
+  }
+
+  /* Panel: parked off-screen on its own compositor layer. */
   .nav-links {
     display: flex;
     flex-direction: column;
@@ -350,14 +379,19 @@ small { font-size: 0.85rem; color: var(--slate-mute); }
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
-    transform: translateX(100%);
-    visibility: hidden;
-    transition: transform 380ms var(--ease), visibility 0s linear 380ms;
+    /* GPU compositor layer — translate3d forces it; will-change keeps it. */
+    transform: translate3d(100%, 0, 0);
+    -webkit-transform: translate3d(100%, 0, 0);
+    will-change: transform;
+    transition: transform 340ms cubic-bezier(.22, 1, .36, 1);
+    /* Contain layout/paint so animation can't reflow the document. */
+    contain: layout paint style;
+    pointer-events: none;
   }
   .nav-links.mobile-open {
-    transform: translateX(0);
-    visibility: visible;
-    transition: transform 420ms var(--ease), visibility 0s linear 0s;
+    transform: translate3d(0, 0, 0);
+    -webkit-transform: translate3d(0, 0, 0);
+    pointer-events: auto;
   }
 
   .nav-links a {
@@ -369,10 +403,13 @@ small { font-size: 0.85rem; color: var(--slate-mute); }
     color: var(--ivory);
     padding: 16px 0;
     border-bottom: 1px solid var(--slate-line);
+    transition: color 180ms cubic-bezier(.22, 1, .36, 1);
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
   }
   .nav-links a:hover,
+  .nav-links a:active,
   .nav-links a.active { color: var(--gold-500); }
-  /* Hide the desktop hover underline indicator inside the panel */
   .nav-links a::after { display: none; }
 
   /* Close (X) button — injected by JS, top-right of the panel */
@@ -388,29 +425,43 @@ small { font-size: 0.85rem; color: var(--slate-mute); }
     border: 1px solid var(--slate-line);
     color: var(--ivory);
     cursor: pointer;
-    transition: border-color 180ms var(--ease), color 180ms var(--ease), background 180ms var(--ease);
+    transition: border-color 180ms cubic-bezier(.22, 1, .36, 1),
+                color 180ms cubic-bezier(.22, 1, .36, 1),
+                background 180ms cubic-bezier(.22, 1, .36, 1),
+                transform 180ms cubic-bezier(.22, 1, .36, 1);
+    will-change: transform;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
   }
-  .nav-close:hover,
-  .nav-close:focus-visible {
+  .nav-close:hover {
     border-color: var(--gold-500);
     color: var(--gold-500);
-    outline: none;
   }
-
-  /* While menu is open, hide the hamburger so it doesn't compete with the X */
-  body.nav-open .nav-toggle { opacity: 0; pointer-events: none; }
+  .nav-close:active { transform: scale(.94); }
+  .nav-close:focus-visible {
+    outline: 2px solid var(--gold-500);
+    outline-offset: 3px;
+  }
 }
 
 /* Belt-and-braces: keep the panel inert on desktop even if class lingers */
 @media (min-width: 1025px) {
   .nav-backdrop { display: none !important; }
   .nav-close { display: none !important; }
-  .nav-links { transform: none !important; visibility: visible !important; }
+  .nav-links {
+    transform: none !important;
+    -webkit-transform: none !important;
+    pointer-events: auto !important;
+    contain: none !important;
+    will-change: auto !important;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .nav-backdrop,
-  .nav-links { transition: none !important; }
+  .nav-links,
+  .nav-close,
+  .nav-toggle { transition: none !important; }
 }
 
 /* ---------- Hero ---------- */
