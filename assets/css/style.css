@@ -393,23 +393,33 @@ h1 em, h2 em, h3 em, .hero h1 .gold {
 .nav-toggle.open span:nth-child(3) { transform: translateY(-6.5px) rotate(-45deg); }
 
 /* ============================================================================
-   Mobile menu (slide-in sheet) — refactored for high-FPS on mobile.
-   Visual design unchanged from previous version.
+   Mobile menu (slide-in sheet)
    ----------------------------------------------------------------------------
-   Performance notes (see THEME2_NOTES / main.js for the cause-and-fix log):
-     • Backdrop uses opacity + pointer-events (compositor-only) — no
-       backdrop-filter on mobile, no visibility transition.
-     • Panel uses translate3d + will-change to stay on its own GPU layer.
-     • `contain: layout paint style` isolates the panel — its animation can't
-       trigger layout/paint outside the sheet.
-     • Scroll lock is handled by `overflow:hidden` on <html>+<body> (set via
-       JS class) — no position:fixed snap, no scrollY reset, no header
-       re-animation while open.
-     • Header's blur is suppressed while menu is open to avoid stacked
-       backdrop-filter passes.
+   Architecture: ONE state class — `html.nav-open` — drives every transition.
+   JS only toggles that class (plus a CSS variable for the scroll offset).
+   CSS handles every visual response via descendant selectors. There is no
+   per-element open class, no multi-stage rendering, no timing risk.
+
+   Two-stage-render bug fix (root cause):
+     • Previously the panel was sized via `top:0; bottom:0`, which on iOS
+       Safari re-anchors the panel when the URL bar shows/hides. Since
+       activating body's position:fixed lock causes iOS to re-extend the URL
+       bar (the browser thinks the page is at scrollY=0), the panel's bottom
+       edge would resize MID-animation — the upper portion arrived first,
+       then the lower portion snapped into place as the viewport settled.
+     • The fix is `height: 100dvh` (dynamic viewport height): the panel
+       smoothly tracks the visible viewport instead of re-anchoring at the
+       new bottom edge. `100vh` is a fallback for browsers without dvh
+       support (~Nov 2022 cutoff).
+
+   Scroll-position-preserving lock:
+     • JS captures window.scrollY before applying the class
+     • JS sets --scroll-lock-top: -<scrollY>px on <html>
+     • CSS pins body via position:fixed + top: var(--scroll-lock-top)
+     • On close: JS removes the class, then window.scrollTo(0, saved)
    ========================================================================= */
 
-/* Backdrop (no backdrop-filter on mobile for FPS) */
+/* Backdrop — opacity-only fade, GPU-composited */
 .nav-backdrop {
   position: fixed;
   inset: 0;
@@ -420,19 +430,26 @@ h1 em, h2 em, h3 em, .hero h1 .gold {
   transition: opacity 320ms cubic-bezier(.22, 1, .36, 1);
   will-change: opacity;
 }
-.nav-backdrop.show {
+html.nav-open .nav-backdrop {
   opacity: 1;
   pointer-events: auto;
 }
+
 .nav-close { display: none; }
 
-/* Scroll lock — applied to <html> and <body> by JS when menu opens.
-   Preserves scroll position without position:fixed snapping. */
-html.nav-open,
+/* Scroll lock — single open-state class */
+html.nav-open {
+  overflow: hidden;
+  scrollbar-gutter: stable;
+}
 html.nav-open body {
-  overflow: hidden !important;
-  /* Lock viewport height so iOS Safari can't rubber-band beyond it. */
-  height: 100% !important;
+  position: fixed;
+  top: var(--scroll-lock-top, 0);
+  left: 0;
+  right: 0;
+  width: 100%;
+  overflow: hidden;
+  touch-action: none;
 }
 
 @media (max-width: 1024px) {
@@ -443,20 +460,23 @@ html.nav-open body {
                 transform 200ms cubic-bezier(.22, 1, .36, 1);
   }
 
-  /* While menu is open: kill the header blur (one compositor pass instead of
-     two) and visually retire the hamburger. */
-  body.nav-open .site-header.scrolled {
+  /* While menu is open: kill header blur (one compositor pass instead of
+     two), retire the hamburger. */
+  html.nav-open .site-header.scrolled {
     background: rgba(245, 241, 234, 0.96);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
-  body.nav-open .nav-toggle {
+  html.nav-open .nav-toggle {
     opacity: 0;
     pointer-events: none;
     transform: scale(.92);
   }
 
-  /* Panel: parked off-screen on its own compositor layer. */
+  /* Panel: parked off-screen on its own GPU compositor layer.
+     Geometry is stable from page load — the only transition is `transform`.
+     Critically: height comes from 100dvh (NOT bottom:0) so iOS Safari URL bar
+     toggles can't cause a mid-animation re-anchor. */
   .nav-links {
     display: flex;
     flex-direction: column;
@@ -465,7 +485,9 @@ html.nav-open body {
     position: fixed;
     top: 0;
     right: 0;
-    bottom: 0;
+    /* Stable height — no `bottom: 0` re-anchor risk */
+    height: 100vh;          /* fallback for older browsers */
+    height: 100dvh;         /* dynamic viewport height — adapts smoothly to URL bar */
     width: min(440px, 88vw);
     max-width: 100vw;
     padding: 104px var(--space-7) var(--space-7);
@@ -480,13 +502,15 @@ html.nav-open body {
     transform: translate3d(100%, 0, 0);
     -webkit-transform: translate3d(100%, 0, 0);
     will-change: transform;
+    /* Single transition — only transform animates. */
     transition: transform 360ms cubic-bezier(.22, 1, .36, 1);
-    /* Contain layout/paint so animation can't reflow the document. */
+    /* Contain so the panel animation cannot reflow the document. */
     contain: layout paint style;
-    /* Off-screen panel can't be tapped. */
     pointer-events: none;
+    /* Panel itself remains scrollable on touch while body is locked. */
+    touch-action: pan-y pinch-zoom;
   }
-  .nav-links.mobile-open {
+  html.nav-open .nav-links {
     transform: translate3d(0, 0, 0);
     -webkit-transform: translate3d(0, 0, 0);
     pointer-events: auto;
@@ -502,14 +526,12 @@ html.nav-open body {
     padding: 18px 0;
     border-bottom: 1px solid var(--line);
     transition: color 200ms cubic-bezier(.22, 1, .36, 1);
-    /* Crisp touch response, no 300ms tap delay, no grey flash on iOS. */
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
   }
   .nav-links a:hover,
   .nav-links a:active,
   .nav-links a.active { color: var(--copper-500) !important; }
-  /* Hide the desktop hover underline indicator inside the panel */
   .nav-links a::after { display: none; }
 
   /* Close (X) button — injected by JS, top-right of the panel */
@@ -547,7 +569,7 @@ html.nav-open body {
   }
 }
 
-/* Belt-and-braces: keep the panel inert on desktop even if class lingers. */
+/* Desktop — panel is the regular horizontal nav, force-reset any leaked state */
 @media (min-width: 1025px) {
   .nav-backdrop { display: none !important; }
   .nav-close { display: none !important; }
@@ -557,6 +579,8 @@ html.nav-open body {
     pointer-events: auto !important;
     contain: none !important;
     will-change: auto !important;
+    height: auto !important;
+    touch-action: auto !important;
   }
 }
 
