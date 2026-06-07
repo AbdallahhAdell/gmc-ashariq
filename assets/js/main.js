@@ -81,7 +81,7 @@
     const FOCUSABLE = 'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])';
     let lastFocused = null;
 
-    const isOpen   = () => nav.classList.contains('mobile-open');
+    const isOpen   = () => html.classList.contains('nav-open');
     const isMobile = () => mqMobile.matches;
 
     // Make the panel inert on mobile when closed (out of tab order + AT tree).
@@ -99,18 +99,29 @@
       ? mqMobile.addEventListener('change', syncInert)
       : mqMobile.addListener(syncInert); // Safari < 14
 
+    // --- Single open-state class ---------------------------------------------
+    // ONE class on <html> drives every aspect of the open state: scroll lock,
+    // panel slide, backdrop fade, header background swap, hamburger fade.
+    // CSS owns all the visual transitions; JS owns only the class toggle and
+    // the scroll-position bookkeeping. No multi-stage rendering possible —
+    // every styled state is keyed off the same selector.
+    let savedScrollY = 0;
+
     // --- Open / close ---------------------------------------------------------
     const openMenu = () => {
       if (isOpen()) return;
       lastFocused = document.activeElement;
 
-      // Apply classes to html + body in the same paint frame.
-      html.classList.add('nav-open');
-      body.classList.add('nav-open');
-      nav.classList.add('mobile-open');
-      toggle.classList.add('open');
-      backdrop.classList.add('show');
+      // 1) Capture scroll position BEFORE any layout-affecting change.
+      savedScrollY = window.scrollY || window.pageYOffset || document.documentElement.scrollTop || 0;
 
+      // 2) Set --scroll-lock-top and the open-state class in the same paint
+      //    frame. CSS uses --scroll-lock-top as body.position:fixed's `top`
+      //    offset, so the page stays visually in place — no snap.
+      html.style.setProperty('--scroll-lock-top', `-${savedScrollY}px`);
+      html.classList.add('nav-open');
+
+      // 3) ARIA state.
       toggle.setAttribute('aria-expanded', 'true');
       toggle.setAttribute('aria-label', 'Close menu');
       nav.setAttribute('role', 'dialog');
@@ -118,9 +129,9 @@
       nav.removeAttribute('inert');
       nav.removeAttribute('aria-hidden');
 
-      // Defer focus by one frame so the slide animation has started.
-      // preventScroll:true is critical — without it iOS Safari scrolls the
-      // focused element into view and shifts layout mid-animation.
+      // 4) Defer focus by one frame so the slide animation has visibly begun
+      //    before focus moves. preventScroll:true keeps iOS from running a
+      //    scroll-into-view that would shift layout mid-animation.
       requestAnimationFrame(() => {
         try { closeBtn.focus({ preventScroll: true }); }
         catch (e) { closeBtn.focus(); }
@@ -130,21 +141,24 @@
     const closeMenu = () => {
       if (!isOpen()) return;
 
-      nav.classList.remove('mobile-open');
-      toggle.classList.remove('open');
-      backdrop.classList.remove('show');
+      // 1) Remove the open-state class first — body is no longer position:fixed
+      //    by the time we restore scroll on the next line.
       html.classList.remove('nav-open');
-      body.classList.remove('nav-open');
+      html.style.removeProperty('--scroll-lock-top');
 
+      // 2) Restore the user's exact scroll position. 'instant' avoids
+      //    competing with any smooth-scroll behaviour on <html>.
+      window.scrollTo({ top: savedScrollY, left: 0, behavior: 'instant' });
+
+      // 3) ARIA state.
       toggle.setAttribute('aria-expanded', 'false');
       toggle.setAttribute('aria-label', 'Open menu');
       nav.removeAttribute('role');
       nav.removeAttribute('aria-modal');
-
-      // Re-inert the panel after the slide-out completes.
       syncInert();
 
-      // Return focus to the original trigger (or hamburger as fallback).
+      // 4) Return focus. preventScroll:true keeps the just-restored scroll
+      //    position intact.
       const target = (lastFocused && document.body.contains(lastFocused))
         ? lastFocused
         : toggle;
@@ -251,4 +265,6 @@
     }, { threshold: 0.4 });
     counters.forEach((c) => co.observe(c));
   }
+
+  
 })();
